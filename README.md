@@ -1,32 +1,39 @@
 # X Post Deleter
 
-A lightweight Chrome extension that automatically scrolls through your own X timeline and deletes discoverable posts, quote posts, and replies.
+A Chrome extension that detects your signed-in X account and deletes discoverable posts, quote posts, and replies in a separate background tab. Start from your own Posts or Replies page, then keep browsing elsewhere.
 
 **Deletion is permanent.** Download your X archive before starting. Typing `delete` and clicking **Delete all posts** (or pressing Enter) authorizes the entire run, including posts loaded later. There is no preview or additional confirmation prompt.
 
 ## Install
 
-1. [Download X Post Deleter v1.2.0](https://github.com/marronyao/X_post_deleter/raw/refs/heads/main/downloads/x-post-deleter-1.2.0.zip) and extract it to a permanent folder.
+1. [Download X Post Deleter v1.3.0](https://github.com/marronyao/X_post_deleter/raw/refs/heads/main/downloads/x-post-deleter-1.3.0.zip) and extract it to a permanent folder.
 2. Open `chrome://extensions` in Chrome.
 3. Enable **Developer mode**, then click **Load unpacked**.
-4. Select the extracted folder containing `manifest.json` and `content.js`.
+4. Select the extracted folder containing `manifest.json`, `content.js`, and `background.js`.
 5. Open X, sign in, and refresh the page. The **X Post Deleter** panel appears at the bottom right.
 
-You can also use **Code → Download ZIP** on this repository, extract it, and select the repository folder containing `manifest.json`. No build step, Python, Node.js, or additional extension permissions are required to install it. Keep the chosen folder in place while the extension is installed.
+You can also use **Code → Download ZIP** on this repository, extract it, and select the repository folder containing `manifest.json`. Chrome 102 or newer is required. No build step, Python, or Node.js is needed to install it. The extension requests the `storage` permission to coordinate the background run. Keep the chosen folder in place while the extension is installed.
 
 ## Use
 
-1. Open **Replies** on your own profile: `https://x.com/YOUR_USERNAME/with_replies`.
-2. Verify the username in the panel. Use your handle without `@`, not your display name. It must match the signed-in account.
+1. Sign in to X and open **Posts** or **Replies** on your own profile.
+2. The extension detects your account automatically; there is no username field.
 3. Set **Delay between posts** if desired. The default is **0 seconds**.
 4. Type the exact lowercase word `delete`.
 5. Click **Delete all posts**, or press Enter in the confirmation field.
-6. Keep the tab in the foreground and let the tool scroll automatically. Do not scroll manually, switch accounts, or use other X menus during the run.
-7. Refresh your profile after the run and check the results.
+6. The extension opens an inactive X tab with your Replies timeline so the run can include original posts, quote posts, and replies, even when started from Posts.
+7. You can switch tabs, navigate away from the starting page, or close the starting tab. Keep Chrome and the separate deletion tab open. Do not scroll, navigate, refresh, or use menus in the deletion tab, and do not switch X accounts during the run.
+8. When the run ends, refresh your profile and check the results. The deletion tab stays open for inspection.
 
-Click **Stop now** or press **Esc** to stop. Moving the tab to the background also stops processing. Stopping cannot undo requests already submitted. If an X confirmation dialog remains open, cancel it manually. **Minimize** only hides the panel; it does not stop the run.
+Click **Stop now** in the original panel or the deletion tab's panel to stop. You can also press **Esc** while either X panel's tab is focused. Stopping cannot undo requests already submitted. If an X confirmation dialog remains open, cancel it manually. **Minimize** only hides the panel; it does not stop the run.
 
-Changing the username or delay clears the confirmation. A stopped or completed run never resumes automatically: check X, type `delete` again, and start another run.
+Changing the delay clears the confirmation. A stopped or completed run never resumes automatically: check X, type `delete` again, and start another run. Only one deletion run can be active at a time.
+
+### Background operation
+
+The starting page is a controller; deletion takes place in a separate inactive tab. This keeps the run independent of navigation in your original tab. The account is checked again in the deletion tab before deletion and during the run.
+
+Hidden tabs may run more slowly because Chrome throttles their timers. The extension makes a best-effort request to prevent automatic tab discard, but cannot guarantee continued execution during browser shutdown, computer sleep, or browser-enforced suspension. Closing, refreshing, or navigating the deletion tab stops the run; it does not silently resume. Keep that tab open and untouched until finished.
 
 ### Delay
 
@@ -55,11 +62,13 @@ The tool works through X's visible web interface. It cannot delete history that 
 
 Scanning ends after six unchanged bottom checks without a loading indicator. **Finished means the scan ended, not that your entire account history is proven empty.** Refresh and verify; if older posts appear, run the tool again. A submitted deletion request or a post disappearing from the page is not independent proof of final server deletion.
 
-The tool stops on account or page changes, unexpected menus or dialogs, timeouts, detected X errors, or 120 consecutive scroll checks without finding an eligible post. Interface changes can break detection. Automated tests use simulated timelines; they do not perform real-account deletions or establish compatibility with every current X layout.
+The tool stops on account changes, deletion-tab navigation, unexpected menus or dialogs, timeouts, detected X errors, or 120 consecutive scroll checks without finding an eligible post. Interface changes can break detection. Automated tests use simulated timelines; they do not perform real-account deletions or establish compatibility with every current X layout.
 
 ## Privacy
 
-The extension runs locally on `x.com` and `www.x.com`. It uses the signed-in page's normal controls to submit deletion requests to X. It does not read passwords, directly access cookies, call private APIs, send data to third-party services, or persist account or post data. Logs exist only in the current page.
+The extension runs on `x.com` and `www.x.com`. It uses the signed-in page's normal controls to submit deletion requests to X. It does not read passwords, directly access cookies, call private APIs, or send data to third-party services.
+
+The `storage` permission is used for Chrome's in-memory `storage.session` area. It holds the current job's account handle, delay, tab IDs, status, deletion count, and latest progress message (which can include a post ID or X error). Full page logs stay in their respective tabs. No post bodies or history archive are saved. Session state is not synced and is cleared when Chrome restarts or the extension reloads. No browsing-history, cookies, debugger, or broad host-access permission is requested.
 
 ## Update or uninstall
 
@@ -71,10 +80,11 @@ To uninstall, click **Remove** at `chrome://extensions` and refresh all X tabs.
 
 | Problem | What to check |
 | --- | --- |
-| Panel is missing | Reload the extension, refresh X, and confirm the selected folder contains `manifest.json`. |
+| Panel is missing | Reload the extension, refresh X, and confirm the selected folder contains `manifest.json` and `background.js`. |
 | Account cannot be identified | Sign in and widen the window so the left navigation's Profile link is available. |
-| Start button is disabled | Enter a valid username, a delay from 0 to 120, and exactly `delete`. |
-| Tool asks for Replies | Open your own `/with_replies` page before starting. |
+| Start button is disabled | Enter a delay from 0 to 120 and exactly `delete`. |
+| Tool asks for your profile | Open your own Posts or Replies page. Other profiles and the Home feed cannot start a run. |
+| Background run is slow | Chrome can throttle hidden tabs. Open the deletion tab to inspect progress without interacting with its timeline. |
 | Tool stops unexpectedly | Read the panel log, cancel pending dialogs, and check X before starting again. |
 | Older posts remain | Refresh and run again if X loads more history; hidden or unavailable history cannot be reached by this tool. |
 
@@ -86,7 +96,7 @@ Node.js 22 or newer runs the tests. There are no npm dependencies to install.
 npm test
 ```
 
-The tests cover confirmation, delay validation, zero-delay behavior, automatic discovery, author filtering, duplicate avoidance, stopping, errors, and run cleanup. They simulate the browser and do not delete real posts.
+The tests cover confirmation, account detection, Posts/Replies entry, background coordination, tab lifecycle, delay validation, automatic discovery, author filtering, duplicate avoidance, stopping, errors, and run cleanup. They simulate the browser and do not delete real posts.
 
 To rebuild the installation ZIP, use Python 3.9 or newer (standard library only):
 
@@ -94,10 +104,11 @@ To rebuild the installation ZIP, use Python 3.9 or newer (standard library only)
 python scripts/package.py
 ```
 
-The packager includes only the manifest, content script, README, installation guide, and license. It excludes tests, Git metadata, and development files, and uses fixed ZIP timestamps for reproducible output. Rebuild and commit the ZIP whenever its included files change.
+The packager includes only the manifest, content script, background service worker, README, installation guide, and license. It excludes tests, Git metadata, and development files, and uses fixed ZIP timestamps for reproducible output. Rebuild and commit the ZIP whenever its included files change.
 
 ```text
-content.js                  Extension logic and panel
+content.js                  Panel, account detection, and deletion logic
+background.js               Background tab coordination and session state
 manifest.json               Chrome Manifest V3 configuration
 README.md                   Project and usage documentation
 Installation and Usage.txt  Plain-text installation guide
@@ -107,9 +118,7 @@ downloads/                  Ready-to-extract installation ZIP
 LICENSE                     MIT license
 ```
 
-### Optional userscript
-
-`content.js` includes userscript metadata. You can paste its full contents into a new Tampermonkey script instead of loading the Chrome extension. Install only one version at a time to avoid conflicts. This distribution is primarily tested as a Chrome extension.
+This version requires the Chrome extension runtime and cannot run as a standalone Tampermonkey userscript.
 
 ## License
 
@@ -117,7 +126,8 @@ LICENSE                     MIT license
 
 ## References
 
+- [Chrome: Tabs API](https://developer.chrome.com/docs/extensions/reference/api/tabs)
+- [Chrome: Storage API](https://developer.chrome.com/docs/extensions/reference/api/storage)
 - [Chrome: Load an unpacked extension](https://developer.chrome.com/docs/extensions/get-started/tutorial/hello-world)
 - [X: Delete posts](https://help.x.com/en/using-x/delete-posts)
 - [X: Reposts](https://help.x.com/en/using-x/how-to-repost)
-- [Tampermonkey FAQ](https://www.tampermonkey.net/faq.php?locale=en)

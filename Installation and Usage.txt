@@ -1,4 +1,4 @@
-X Post Deleter — Chrome Extension 1.2.0
+X Post Deleter — Chrome Extension 1.3.0
 
 Installation
 1. Keep the extension files in a permanent folder. If you received a ZIP file,
@@ -6,7 +6,7 @@ Installation
 2. Open chrome://extensions in Chrome.
 3. Turn on Developer mode in the upper-right corner.
 4. Click Load unpacked.
-5. Select the folder containing manifest.json and content.js.
+5. Select the folder containing manifest.json, content.js, and background.js.
    Do not select the ZIP file. If extraction created nested folders, select the
    inner folder containing these files.
 6. Open https://x.com in your usual Chrome window, sign in, and refresh the page.
@@ -19,57 +19,60 @@ Updating an existing installation
 
 Usage
 1. Download your X archive before deleting. Deletion is permanent.
-2. Open your own Replies tab, for example https://x.com/example/with_replies.
-3. Verify your username in the panel (the name after @, not your display name).
-4. Delay defaults to 0 seconds. Enter any value from 0 to 120 seconds to add a
-   fixed wait between posts. No random delay is added. At 0, each operation still
-   waits for X's menus, confirmation dialogs, and page updates to complete.
+2. Sign in and open Posts or Replies on your own X profile.
+3. Your signed-in account is detected automatically. No username entry is needed.
+4. Delay defaults to 0 seconds. Values from 0 to 120 add a fixed wait between
+   posts. No random delay is added. At 0, the tool still waits for X to respond.
 5. Type the exact lowercase word delete, then click Delete all posts or press Enter.
-   This authorizes deletion of all discoverable posts, quote posts, and replies,
-   including older posts loaded later. There is no preview, acknowledgment
-   checkbox, or additional browser confirmation dialog.
-6. Keep the tab in the foreground. Do not scroll, switch accounts, or use X menus.
-7. Stop now or Esc stops processing. Leaving the tab also stops it. Already
-   submitted deletion requests cannot be undone.
-8. The scan ends after six unchanged bottom checks without a loading indicator.
-   Refresh and verify. If older posts become visible, run it again.
-9. Changing the username or delay clears the confirmation. Stopping, completing,
-   or refreshing does not resume deletion automatically; type delete again.
+   This authorizes all discoverable posts, quote posts, and replies loaded later.
+   There is no preview or additional confirmation prompt.
+6. A separate inactive tab opens your Replies timeline and performs deletion.
+   You can switch tabs, navigate away from the starting page, or close it.
+   Keep Chrome and the deletion tab open. Do not interact with the deletion tab
+   or switch X accounts while the tool is running.
+7. Stop now in either panel or Esc in either X tab requests a stop. Submitted
+   deletion requests cannot be undone. Cancel any pending X dialog manually.
+8. Refresh your profile after the scan to verify results. X may not expose all
+   older history. If more posts become visible, start a new run.
+9. Changing the delay clears confirmation. Stopping, completing, or refreshing
+   does not resume automatically. Type delete again to authorize another run.
 
-Scope and limitations
-- The tool scans the Replies timeline. It cannot delete posts that X does not
-  expose there. No API, archive import, or automatic page reload is used.
-- Your original posts, quote posts, and replies can be deleted. Deleting a quote
-  post does not delete the quoted original; deleting your reply does not delete
-  the other person's post. Pinned posts are eligible in supported X languages.
-- Ordinary reposts and unrecognized social-context cards are skipped. Remove
-  reposts manually with Undo repost. Likes and direct messages are not changed.
-- The interface is English. X's Delete and Pinned labels are recognized in English,
-  Simplified Chinese, and Traditional Chinese. Switch X to one of these languages.
-- Errors, unexpected menus or confirmation dialogs, account or page changes, and
-  timeouts stop the tool. There are no automatic deletion retries. A stuck loader
-  or 120 consecutive empty scroll checks also stops it. Follow X's instructions
-  if a limit or verification request appears. Delays do not bypass limits.
-- Submitted requests and posts disappearing from the page are not proof of final
-  server deletion. Refresh and check the original-post links to verify results.
-- The automated scan was checked with simulated timelines; deletion has not been
-  tested on your real account. X interface changes may cause the tool to stop.
-- Processing is local. No third-party service is used. The tool does not read
-  passwords, directly access cookies, or store account or post data. A refresh
-  does not resume the run. After stopping, type delete and start a new run to resume.
-- Use only one X tab. Minimizing the panel does not stop processing.
+Background operation and scope
+- Posts and Replies are both valid starting pages. The separate deletion tab
+  uses Replies to include original posts, quote posts, and replies.
+- Chrome may throttle hidden-tab timers. A best-effort request prevents automatic
+  discard, but browser suspension, computer sleep, and shutdown can interrupt work.
+- Closing, navigating, or refreshing the deletion tab stops the run. The original
+  page is only a controller and may be closed without stopping the deletion tab.
+- One run may be active at a time. The authorized account is checked before and
+  during deletion. Account changes, unexpected menus, errors, and timeouts stop it.
+- Ordinary reposts and unrecognized social-context cards are skipped. Likes,
+  messages, and other people's posts are not changed. Deleting your quote post
+  or reply does not delete the other person's original post.
+- Delete and Pinned labels are recognized in English, Simplified Chinese, and
+  Traditional Chinese. The extension interface is English.
+- Six unchanged bottom checks without a loader end the scan. This does not prove
+  the entire account history is empty. A stuck loader or 120 empty scroll checks
+  also stops scanning. No private API, archive import, or automatic reload is used.
+- Follow X's instructions if it displays limits or verification requests.
+  Delays do not bypass limits. Deletion is not automatically retried.
+- Automated tests use simulated tabs and timelines, not real-account deletions.
+  X interface changes can break detection.
+- The storage permission keeps job state in Chrome's in-memory session storage:
+  account handle, delay, tab IDs, status, count, and latest message (possibly a
+  post ID or X error). It is not synced and clears on browser restart or extension
+  reload. No post bodies or archive are saved. Full logs remain in the page tabs.
+- No passwords, direct cookie access, private APIs, or third-party services are used.
+- Minimizing the panel does not stop processing.
 
 Removal
 Open chrome://extensions, find X Post Deleter, and click Remove.
 Then refresh all X tabs. While the extension is installed, keep its installation
 folder in place so Chrome can continue loading it.
 
-Optional: Tampermonkey
-The content.js file includes userscript metadata and can also be used as a
-Tampermonkey script. Install either the Chrome extension or the userscript to avoid
-running both at once. In Tampermonkey, create a new script, replace the default
-contents with the full contents of content.js, save, and refresh X. If necessary,
-turn on Allow user scripts in Tampermonkey's extension details in Chrome.
+Compatibility
+Chrome 102 or newer is required. This version uses Chrome extension APIs and
+cannot be installed as a standalone Tampermonkey userscript.
 
 Official references
 Chrome: Load an unpacked extension
@@ -78,5 +81,3 @@ X: Delete posts
 https://help.x.com/en/using-x/delete-posts
 X: Reposts
 https://help.x.com/en/using-x/how-to-repost
-Tampermonkey: Userscript permissions
-https://www.tampermonkey.net/faq.php?locale=en

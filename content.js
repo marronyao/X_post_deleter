@@ -1,13 +1,4 @@
-// ==UserScript==
-// @name         X Post Deleter (Auto-scroll and Stop)
-// @namespace    local.x.session.delete
-// @version      1.2.0
-// @description  Type delete to automatically load and delete your own posts, quote posts, and replies. Stop at any time.
-// @match        https://x.com/*
-// @match        https://www.x.com/*
-// @grant        none
-// @run-at       document-idle
-// ==/UserScript==
+// X Post Deleter v1.3.0 — Chrome extension content script.
 
 (() => {
   'use strict';
@@ -37,14 +28,14 @@
     <section>
       <h2>X Post Deleter</h2>
       <small>Permanently delete all discoverable posts, quote posts, and replies. Download your X archive first. Ordinary reposts are skipped.</small>
-      <label>Your username (without @)<input id="handle" type="text" autocomplete="off" placeholder="Your username"></label>
-      <p><small>Open your <a id="replies" href="https://x.com/">Replies tab</a> before starting. The tool automatically scrolls to find older posts.</small></p>
+      <p id="account" role="status">Your signed-in account will be detected automatically.</p>
+      <p><small>Start from your own Posts or Replies tab. A separate background tab loads your posts and replies; you can browse elsewhere while it runs.</small></p>
       <label>Delay between posts (0–120 seconds)<input id="delay" type="number" min="0" max="120" step="any" value="0"></label>
       <small>0 adds no extra delay. Each operation still waits for X to respond. Processing stops if X reports an error or limit.</small>
       <p id="status" role="status">Ready. Type delete to authorize permanent deletion.</p>
       <label>Type delete to confirm permanent deletion of ALL your discoverable posts<input id="confirm" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="delete"></label>
       <button id="run" disabled>Delete all posts</button><button id="stop" disabled>Stop now</button><button id="fold">Minimize</button>
-      <p><small>Keep this tab in the foreground while running. Do not scroll, switch accounts, or use other menus. Stopping cannot undo deletion requests already submitted.</small></p>
+      <p><small>You may leave this page. Keep Chrome and the background deletion tab open. Do not interact with that tab or switch X accounts. Stopping cannot undo submitted requests.</small></p>
       <div id="log" role="log" aria-live="polite">This tool does not read passwords, call private APIs, or send data to external services.</div>
     </section>`;
   document.documentElement.append(host);
@@ -53,7 +44,13 @@
   let running = false;
   let stopped = false;
   let submitted = 0;
-  const cleanHandle = value => value.trim().replace(/^@/, '').toLowerCase();
+  let remoteJob = null;
+  let launching = false;
+  let polling = null;
+  const send = message => chrome.runtime.sendMessage(message).then(result => {
+    if (result?.error) throw new Error(result.error);
+    return result;
+  });
   const validHandle = value => /^[a-z0-9_]{1,15}$/.test(value);
   const visible = el => !!el && el.getClientRects().length > 0;
   const text = el => (el?.textContent || '').replace(/\s+/g, ' ').trim();
@@ -62,6 +59,7 @@
   function log(message) {
     $('log').textContent += `\n${new Date().toLocaleTimeString()} ${message}`;
     $('log').scrollTop = $('log').scrollHeight;
+    if (session?.jobId) report(message);
   }
   function account() {
     const link = document.querySelector('a[data-testid="AppTabBar_Profile_Link"]');
@@ -70,10 +68,10 @@
     return m[1].toLowerCase();
   }
   function context(handle) {
-    if (!validHandle(handle) || account() !== handle) throw new Error('The entered username does not match the signed-in account.');
+    if (!validHandle(handle) || account() !== handle) throw new Error('The signed-in account changed. Stopped.');
     const path = location.pathname.replace(/\/$/, '').toLowerCase();
-    if (path !== `/${handle}/with_replies`) {
-      throw new Error('Open the Replies tab on your own profile first so posts and replies are both included.');
+    if (path !== `/${handle}` && path !== `/${handle}/with_replies`) {
+      throw new Error('Open the Posts or Replies tab on your own profile first.');
     }
     return path;
   }
@@ -112,10 +110,10 @@
     return value.trim() !== '' && Number.isFinite(seconds) && seconds >= 0 && seconds <= 120;
   }
   function authorized() {
-    return validHandle(cleanHandle($('handle').value)) && validDelay() && $('confirm').value === 'delete';
+    return validDelay() && $('confirm').value === 'delete';
   }
   function update() {
-    $('run').disabled = running || !authorized();
+    $('run').disabled = running || launching || !!(remoteJob && ['starting', 'running', 'stopping'].includes(remoteJob.status)) || !authorized();
   }
   function invalidate() {
     if (running) return;
@@ -125,22 +123,24 @@
   }
   function guard() {
     if (stopped) throw new Error('Stopped.');
-    if (document.hidden) throw new Error('The tab is no longer in the foreground. Stopped.');
     if (!session || context(session.handle) !== session.path) throw new Error('The page has changed. Stopped.');
   }
   async function pause(ms) {
-    const end = Date.now() + ms;
-    do { guard(); await new Promise(resolve => setTimeout(resolve, Math.min(150, Math.max(0, end - Date.now())))); }
-    while (Date.now() < end);
+    guard();
+    // A single timer avoids chains of tiny timers being heavily throttled in hidden tabs.
+    await new Promise(resolve => setTimeout(resolve, ms));
     guard();
   }
   async function until(read, timeout = 7000) {
-    const end = Date.now() + timeout;
-    while (Date.now() < end) {
-      guard(); const result = read(); if (result) return result;
-      await pause(150);
+    const end = Date.now() + (document.hidden ? Math.max(timeout, 120000) : timeout);
+    while (true) {
+      guard();
+      const result = read();
+      if (result) return result;
+      if (Date.now() >= end) break;
+      await pause(250);
     }
-    throw new Error('Timed out waiting for X. The interface may have changed, or there may be a network issue or action limit. Stopped; no automatic retry.');
+    throw new Error('Timed out waiting for X. Stopped; check the deletion tab before starting again.');
   }
   const deleteLabels = new Set(['Delete', '\u522a\u9664', '\u5220\u9664']);
   const deleteItem = el => deleteLabels.has(text(el));
@@ -222,53 +222,112 @@
       if (++scans >= 120) throw new Error('No eligible posts found after 120 scroll checks. Stopped; refresh and check X before starting again.');
     }
   }
+  function report(message, status) {
+    if (!session?.jobId) return;
+    return send({type: 'REPORT_RUN', id: session.jobId, submitted, message, status}).catch(() => {
+      stopped = true;
+    });
+  }
+  function showRemote(job) {
+    remoteJob = job;
+    if (!job) return;
+    const active = ['starting', 'running', 'stopping'].includes(job.status);
+    $('account').textContent = `Account: @${job.handle}`;
+    $('status').textContent = `${job.status}: ${job.submitted} deletion requests submitted. ${job.message}`;
+    $('stop').disabled = !active;
+    $('delay').disabled = active;
+    if (active) $('confirm').value = '';
+    update();
+    if (!active && polling) { clearInterval(polling); polling = null; }
+  }
+  async function poll() {
+    try { const result = await send({type: 'GET_RUN'}); showRemote(result?.job); }
+    catch (error) { log(error.message); }
+  }
+  function monitor() {
+    if (!polling) polling = setInterval(poll, 2000);
+  }
   async function run() {
-    if (running || !authorized()) return;
-    const handle = cleanHandle($('handle').value);
-    const seconds = Number($('delay').value);
+    if (running || launching || !authorized() || (remoteJob && ['starting', 'running', 'stopping'].includes(remoteJob.status))) return;
+    launching = true; update();
     try {
-      const path = context(handle);
-      if (document.hidden) throw new Error('Keep this tab in the foreground before starting.');
-      if (document.querySelector('[role="dialog"], [role="alertdialog"], [role="menu"]')) throw new Error('Close any open dialogs or menus on X first.');
-      session = { handle, path };
-    } catch (error) { log(error.message); return; }
+      const handle = account();
+      context(handle);
+      const result = await send({type: 'START_RUN', handle, seconds: Number($('delay').value)});
+      $('confirm').value = '';
+      showRemote(result.job); monitor();
+      log(`Background deletion started for @${handle}. You may leave this page; keep the deletion tab open.`);
+    } catch (error) { log(error.message); }
+    finally { launching = false; update(); }
+  }
+  async function runWorker(job) {
     running = true; stopped = false; submitted = 0;
-    for (const id of ['handle', 'delay', 'confirm']) $(id).disabled = true;
-    $('confirm').value = '';
-    $('stop').disabled = false; update();
-    log(`Starting deletion of all discoverable posts, quote posts, and replies by @${handle}. Extra delay: ${seconds} seconds.`);
-    let outcome = 'Stopped';
+    session = {handle: job.handle, path: `/${job.handle}/with_replies`, jobId: job.id};
+    $('account').textContent = `Deleting as @${job.handle} in this background tab`;
+    $('confirm').value = ''; $('delay').value = String(job.seconds);
+    $('delay').disabled = true; $('stop').disabled = false; update();
+    let outcome = 'stopped';
     try {
+      // X's navigation can appear after document_idle, especially in inactive tabs.
+      const deadline = Date.now() + 120000;
+      while (true) {
+        if (stopped) throw new Error('Stopped.');
+        if (location.pathname.toLowerCase().replace(/\/$/, '') !== session.path) throw new Error('The deletion tab navigated away. Stopped.');
+        let detected = null;
+        try { detected = account(); } catch { /* Wait for X to finish loading. */ }
+        if (detected && detected !== job.handle) throw new Error('The signed-in account does not match the authorized account. Stopped.');
+        if (detected) break;
+        if (Date.now() >= deadline) throw new Error('Cannot detect the signed-in account. Check the deletion tab and start again.');
+        await new Promise(resolve => setTimeout(resolve, 500));
+      }
       guard();
-      await deleteAll(seconds);
-      outcome = 'Finished';
+      log(`Deleting all discoverable posts, quote posts, and replies by @${job.handle}. Extra delay: ${job.seconds} seconds.`);
+      await deleteAll(job.seconds);
+      outcome = 'finished';
     } catch (error) { log(error.message); }
     finally {
+      await report(outcome === 'finished' ? 'Scan ended. Refresh your profile to verify remaining history.' : $('log').textContent.split('\n').pop(), outcome);
       running = false; stopped = true;
-      for (const id of ['handle', 'delay', 'confirm']) $(id).disabled = false;
-      $('stop').disabled = true;
-      session = null; $('confirm').value = '';
+      session = null; $('confirm').value = ''; $('delay').disabled = false; $('stop').disabled = true;
       $('status').textContent = `${outcome}; ${submitted} deletion requests submitted. Refresh to verify.`;
       update();
     }
   }
+  async function stopRun() {
+    stopped = true;
+    log('Stop requested. No further deletion will be submitted. Cancel any pending X dialog manually.');
+    const id = session?.jobId || remoteJob?.id;
+    if (id) {
+      try { const result = await send({type: 'STOP_RUN', id}); if (!running) showRemote(result.job); }
+      catch (error) { log(error.message); }
+    }
+  }
   $('run').addEventListener('click', run);
-  $('stop').addEventListener('click', () => { stopped = true; log('Stop requested; no further actions will be submitted. Manually cancel any pending confirmation dialog on X.'); });
+  $('stop').addEventListener('click', stopRun);
   $('fold').addEventListener('click', () => host.classList.add('folded'));
   $('mini').addEventListener('click', () => host.classList.remove('folded'));
   $('confirm').addEventListener('input', update);
   $('confirm').addEventListener('keydown', event => {
     if (event.key === 'Enter') { event.preventDefault(); run(); }
   });
-  $('handle').addEventListener('input', () => { invalidate(); updateRepliesLink(); });
   $('delay').addEventListener('input', invalidate);
-  function updateRepliesLink() {
-    const handle = cleanHandle($('handle').value);
-    $('replies').href = validHandle(handle) ? `https://x.com/${handle}/with_replies` : 'https://x.com/';
+  document.addEventListener('keydown', event => {
+    if (event.key === 'Escape' && (running || remoteJob)) stopRun();
+  }, true);
+  chrome.runtime.onMessage.addListener((message, sender, respond) => {
+    if (message.type === 'STOP_RUN' && message.id === session?.jobId) {
+      stopped = true;
+      respond({stopped: true});
+    }
+  });
+  async function initialize() {
+    try {
+      try { $('account').textContent = `Detected account: @${account()}`; } catch { /* Account is rechecked at Start. */ }
+      const result = await send({type: 'CLAIM_RUN'});
+      if (result?.claim) await runWorker(result.job);
+      else if (result?.job) { showRemote(result.job); if (['starting', 'running', 'stopping'].includes(result.job.status)) monitor(); }
+    } catch (error) { log(error.message); }
   }
-  document.addEventListener('visibilitychange', () => { if (running && document.hidden) stopped = true; });
-  document.addEventListener('keydown', event => { if (running && event.key === 'Escape') stopped = true; }, true);
-  try { $('handle').value = account(); } catch { /* User may log in after injection. */ }
-  updateRepliesLink();
   update();
+  initialize();
 })();

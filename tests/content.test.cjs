@@ -16,8 +16,9 @@ function fixture() {
     documentElement:{append(){}}, querySelector:() => null, querySelectorAll:() => [], addEventListener(){}};
   const window = {innerHeight:800, scrollTo(){}, confirm:() => true};
   window.self = window; window.top = window;
-  const sandbox = {window, document, location:{pathname:'/owner/with_replies'}, URL, setTimeout, console};
-  const expose = `globalThis.api = {deleteAll, update, guard, run, invalidate, authorized,
+  const chrome = {runtime:{sendMessage:async () => ({}), onMessage:{addListener(){}}}};
+  const sandbox = {window, document, chrome, location:{pathname:'/owner/with_replies'}, URL, setTimeout, setInterval:() => 1, clearInterval(){}, console};
+  const expose = `globalThis.api = {deleteAll, update, guard, run, runWorker, stopRun, context, invalidate, authorized,
     configure(code) { eval(code); }};`;
   vm.runInNewContext(source.replace('const owned =', 'let owned =').replace(/\}\)\(\);\s*$/, expose + '})();'), sandbox);
   return {sandbox, $, document, window, ui, api:sandbox.api};
@@ -37,24 +38,41 @@ function scanFixture() {
   return {...f, root};
 }
 test('only exact lowercase delete authorizes starting without a preview', () => {
-  const f=fixture(); f.$('handle').value='owner'; f.$('delay').value='0';
+  const f=fixture(); f.$('delay').value='0';
   for (const value of ['', 'DELETE', 'delete ', 'DELETE ALL @owner']) {
     f.$('confirm').value=value; f.api.update(); assert.equal(f.$('run').disabled,true);
   }
   f.$('confirm').value='delete'; f.api.update(); assert.equal(f.$('run').disabled,false);
   assert(!f.ui.innerHTML.includes('id="preview"'));
   assert(!f.ui.innerHTML.includes('id="ack"'));
+  assert(!f.ui.innerHTML.includes('id="handle"'));
   assert(f.ui.innerHTML.includes('min="0" max="120" step="any" value="0"'));
 });
-test('run refuses Posts tab without submitting a deletion', async () => {
-  const f=fixture(); f.$('handle').value='owner'; f.$('delay').value='0'; f.$('confirm').value='delete';
-  f.document.querySelector=() => ({href:'https://x.com/owner'});
+test('auto-detects account and starts a background run from Posts', async () => {
+  const f=fixture(); f.$('delay').value='0'; f.$('confirm').value='delete';
+  f.document.querySelector=selector => selector.includes('AppTabBar_Profile_Link') ? {href:'https://x.com/owner'} : null;
   f.sandbox.location.pathname='/owner';
+  const messages=[];
+  f.sandbox.chrome.runtime.sendMessage=async message => {messages.push(message);return {job:{id:'job',handle:'owner',status:'starting',submitted:0,message:'Opening'}}};
   await f.api.run();
-  assert.match(f.$('log').textContent,/Replies tab/);
+  const start=messages.find(m => m.type==='START_RUN');
+  assert.equal(start.handle,'owner'); assert.equal(start.seconds,0);
+  assert.equal(f.$('confirm').value,'');
+});
+test('refuses someone else profile and non-profile pages', async () => {
+  const f=fixture(); f.$('delay').value='0'; f.$('confirm').value='delete';
+  f.document.querySelector=selector => selector.includes('AppTabBar_Profile_Link') ? {href:'https://x.com/owner'} : null;
+  for (const path of ['/someone', '/home', '/owner/media']) {
+    f.sandbox.location.pathname=path;
+    assert.throws(() => f.api.context('owner'),/own profile/);
+  }
+  for (const path of ['/owner','/owner/with_replies']) {
+    f.sandbox.location.pathname=path;
+    assert.equal(f.api.context('owner'),path);
+  }
 });
 test('invalid delay disables starting, including blank, negative and excessive values', () => {
-  const f=fixture(); f.$('handle').value='owner'; f.$('confirm').value='delete';
+  const f=fixture(); f.$('confirm').value='delete';
   for (const value of ['', '-1', '121', 'NaN', 'Infinity']) {
     f.$('delay').value=value; f.api.update(); assert.equal(f.$('run').disabled,true);
   }
@@ -63,7 +81,7 @@ test('invalid delay disables starting, including blank, negative and excessive v
   }
 });
 test('changing settings clears the confirmation', () => {
-  const f=fixture(); f.$('handle').value='owner'; f.$('delay').value='0'; f.$('confirm').value='delete';
+  const f=fixture(); f.$('delay').value='0'; f.$('confirm').value='delete';
   f.api.invalidate(); assert.equal(f.$('confirm').value,''); assert.equal(f.$('run').disabled,true);
 });
 test('discovers later posts automatically and ignores another author', async () => {
@@ -87,11 +105,13 @@ test('stop prevents deletion', async () => {
   await assert.rejects(f.api.deleteAll(12),/Stopped/);
   assert.equal(f.sandbox.deleted.length,0);
 });
-test('background tab and account changes stop processing', async () => {
+test('hidden tabs keep deleting, while account changes still stop', async () => {
   const f=scanFixture(); f.document.hidden=true;
-  await assert.rejects(f.api.deleteAll(12),/foreground/);
-  f.document.hidden=false; f.api.configure("context = () => {throw new Error('account changed')}");
-  await assert.rejects(f.api.deleteAll(12),/account changed/);
+  f.sandbox.rows=[{id:'1',handle:'owner'}];
+  await f.api.deleteAll(0);
+  assert.deepEqual(Array.from(f.sandbox.deleted),['1']);
+  f.api.configure("context = () => {throw new Error('account changed')}");
+  await assert.rejects(f.api.deleteAll(0),/account changed/);
 });
 test('X errors stop scanning without deletion retry', async () => {
   const f=scanFixture(); f.api.configure("errorToast = () => 'Rate limit exceeded'");
@@ -102,17 +122,17 @@ test('stuck loading indicator stops after bounded empty scans', async () => {
   const f=scanFixture(); f.document.querySelectorAll=()=>[{getClientRects:()=>[{}]}];
   await assert.rejects(f.api.deleteAll(12),/120 scroll checks/);
 });
-test('run cleans up after an error and reports Stopped', async () => {
-  const f=scanFixture(); f.$('handle').value='owner'; f.$('delay').value='0'; f.$('confirm').value='delete';
-  f.api.configure("deleteAll = async () => {throw new Error('test failure')}");
-  await f.api.run();
+test('background worker cleans up after an error and reports Stopped', async () => {
+  const f=scanFixture(); f.api.configure("account=()=>'owner'; deleteAll = async () => {throw new Error('test failure')}");
+  const reports=[]; f.sandbox.chrome.runtime.sendMessage=async m => {reports.push(m);return {}};
+  await f.api.runWorker({id:'job',handle:'owner',seconds:0});
   assert.equal(f.$('stop').disabled,true);
-  assert.equal(f.$('handle').disabled,false);
+  assert.equal(f.$('delay').disabled,false);
   assert.equal(f.$('confirm').value,'');
   assert.equal(f.$('run').disabled,true);
-  assert.match(f.$('status').textContent,/^Stopped;/);
+  assert.match(f.$('status').textContent,/^stopped;/);
+  assert.equal(reports.at(-1).status,'stopped');
 });
-
 test('zero delay adds no between-post pause or random wait', async () => {
   const f=scanFixture(); f.sandbox.rows=[{id:'1',handle:'owner'},{id:'2',handle:'owner'}];
   f.api.configure('globalThis.waits = []; pause = async ms => {guard(); waits.push(ms)}');
@@ -127,15 +147,17 @@ test('positive delay uses exactly the requested wait', async () => {
   assert.equal(f.sandbox.waits.filter(ms => ms === 500).length,1);
   assert(f.sandbox.waits.every(ms => ms === 2500 || ms === 500));
 });
-test('run needs no browser confirmation and prevents a second concurrent run', async () => {
-  const f=scanFixture(); f.$('handle').value='owner'; f.$('delay').value='0'; f.$('confirm').value='delete';
-  f.window.confirm=()=>{throw new Error('Unexpected browser prompt')};
-  f.api.configure('globalThis.runs=0; globalThis.release=null; deleteAll=async () => {runs++; await new Promise(resolve => {release=resolve})}');
-  const first=f.api.run();
-  assert.equal(f.$('confirm').value,'');
-  f.$('confirm').value='delete';
-  await f.api.run(); assert.equal(f.sandbox.runs,1);
-  f.sandbox.release(); await first;
-  assert.equal(f.$('confirm').value,''); assert.equal(f.$('run').disabled,true);
-  assert.match(f.$('status').textContent,/^Finished;/);
+test('background worker refuses an account different from the authorized identity', async () => {
+  const f=scanFixture(); f.api.configure("account=()=>'someone'; deleteAll=async()=>{throw Error('Should not delete')}");
+  await f.api.runWorker({id:'job',handle:'owner',seconds:0});
+  assert.match(f.$('log').textContent,/does not match the authorized account/);
+  assert.equal(f.sandbox.deleted.length,0);
+});
+test('background worker runs while hidden and reports completion', async () => {
+  const f=scanFixture(); f.document.hidden=true;
+  f.api.configure("account=()=>'owner'; deleteAll=async()=>{submitted=2}");
+  const reports=[]; f.sandbox.chrome.runtime.sendMessage=async m=>{reports.push(m);return {}};
+  await f.api.runWorker({id:'job',handle:'owner',seconds:0});
+  assert.equal(reports.at(-1).status,'finished');
+  assert.equal(reports.at(-1).submitted,2);
 });

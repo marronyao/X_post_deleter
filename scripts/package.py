@@ -5,7 +5,7 @@ from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZipFile, ZipInfo
 
 ROOT = Path(__file__).resolve().parent.parent
-FILES = ("manifest.json", "content.js", "README.md", "Installation and Usage.txt", "LICENSE")
+FILES = ("manifest.json", "content.js", "background.js", "README.md", "Installation and Usage.txt", "LICENSE")
 
 
 def main():
