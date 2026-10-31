@@ -1,0 +1,82 @@
+X Post Deleter — Chrome Extension 1.2.0
+
+Installation
+1. Keep the extension files in a permanent folder. If you received a ZIP file,
+   extract it first. Python, Selenium, and a separate Chrome window are not required.
+2. Open chrome://extensions in Chrome.
+3. Turn on Developer mode in the upper-right corner.
+4. Click Load unpacked.
+5. Select the folder containing manifest.json and content.js.
+   Do not select the ZIP file. If extraction created nested folders, select the
+   inner folder containing these files.
+6. Open https://x.com in your usual Chrome window, sign in, and refresh the page.
+   The X Post Deleter panel appears in the bottom-right corner.
+
+Updating an existing installation
+1. Open chrome://extensions and find X Post Deleter.
+2. Click the extension's Reload button.
+3. Refresh your open X tabs to load the updated panel.
+
+Usage
+1. Download your X archive before deleting. Deletion is permanent.
+2. Open your own Replies tab, for example https://x.com/example/with_replies.
+3. Verify your username in the panel (the name after @, not your display name).
+4. Delay defaults to 0 seconds. Enter any value from 0 to 120 seconds to add a
+   fixed wait between posts. No random delay is added. At 0, each operation still
+   waits for X's menus, confirmation dialogs, and page updates to complete.
+5. Type the exact lowercase word delete, then click Delete all posts or press Enter.
+   This authorizes deletion of all discoverable posts, quote posts, and replies,
+   including older posts loaded later. There is no preview, acknowledgment
+   checkbox, or additional browser confirmation dialog.
+6. Keep the tab in the foreground. Do not scroll, switch accounts, or use X menus.
+7. Stop now or Esc stops processing. Leaving the tab also stops it. Already
+   submitted deletion requests cannot be undone.
+8. The scan ends after six unchanged bottom checks without a loading indicator.
+   Refresh and verify. If older posts become visible, run it again.
+9. Changing the username or delay clears the confirmation. Stopping, completing,
+   or refreshing does not resume deletion automatically; type delete again.
+
+Scope and limitations
+- The tool scans the Replies timeline. It cannot delete posts that X does not
+  expose there. No API, archive import, or automatic page reload is used.
+- Your original posts, quote posts, and replies can be deleted. Deleting a quote
+  post does not delete the quoted original; deleting your reply does not delete
+  the other person's post. Pinned posts are eligible in supported X languages.
+- Ordinary reposts and unrecognized social-context cards are skipped. Remove
+  reposts manually with Undo repost. Likes and direct messages are not changed.
+- The interface is English. X's Delete and Pinned labels are recognized in English,
+  Simplified Chinese, and Traditional Chinese. Switch X to one of these languages.
+- Errors, unexpected menus or confirmation dialogs, account or page changes, and
+  timeouts stop the tool. There are no automatic deletion retries. A stuck loader
+  or 120 consecutive empty scroll checks also stops it. Follow X's instructions
+  if a limit or verification request appears. Delays do not bypass limits.
+- Submitted requests and posts disappearing from the page are not proof of final
+  server deletion. Refresh and check the original-post links to verify results.
+- The automated scan was checked with simulated timelines; deletion has not been
+  tested on your real account. X interface changes may cause the tool to stop.
+- Processing is local. No third-party service is used. The tool does not read
+  passwords, directly access cookies, or store account or post data. A refresh
+  does not resume the run. After stopping, type delete and start a new run to resume.
+- Use only one X tab. Minimizing the panel does not stop processing.
+
+Removal
+Open chrome://extensions, find X Post Deleter, and click Remove.
+Then refresh all X tabs. While the extension is installed, keep its installation
+folder in place so Chrome can continue loading it.
+
+Optional: Tampermonkey
+The content.js file includes userscript metadata and can also be used as a
+Tampermonkey script. Install either the Chrome extension or the userscript to avoid
+running both at once. In Tampermonkey, create a new script, replace the default
+contents with the full contents of content.js, save, and refresh X. If necessary,
+turn on Allow user scripts in Tampermonkey's extension details in Chrome.
+
+Official references
+Chrome: Load an unpacked extension
+https://developer.chrome.com/docs/extensions/get-started/tutorial/hello-world
+X: Delete posts
+https://help.x.com/en/using-x/delete-posts
+X: Reposts
+https://help.x.com/en/using-x/how-to-repost
+Tampermonkey: Userscript permissions
+https://www.tampermonkey.net/faq.php?locale=en

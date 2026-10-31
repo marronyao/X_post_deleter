@@ -1,0 +1,18 @@
+{
+  "manifest_version": 3,
+  "name": "X Post Deleter",
+  "version": "1.2.0",
+  "description": "Type delete to automatically scroll through and delete your own X posts, quote posts, and replies.",
+  "content_scripts": [
+    {
+      "matches": [
+        "https://x.com/*",
+        "https://www.x.com/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ]
+}
