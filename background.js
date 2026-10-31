@@ -1,7 +1,7 @@
 'use strict';
 
-// Session storage survives service-worker suspension, but never resumes a run
-// after the deletion tab reloads. Only the tab created for this job may claim it.
+// Only explicit, bounded verification passes may continue across navigation.
+// Manual reloads of an active pass never silently reauthorize a run.
 const ACTIVE = new Set(['starting', 'running', 'stopping']);
 let queue = Promise.resolve();
 const serialized = task => {
@@ -19,7 +19,8 @@ function source(sender) {
 }
 const snapshot = job => job && ({
   id: job.id, handle: job.handle, seconds: job.seconds, workerTabId: job.workerTabId,
-  status: job.status, submitted: job.submitted, message: job.message
+  status: job.status, submitted: job.submitted, message: job.message,
+  timeline: job.timeline, route: job.route, pass: job.pass
 });
 async function handleMessage(message, sender) {
   const url = source(sender);
@@ -30,15 +31,17 @@ async function handleMessage(message, sender) {
     const seconds = message.seconds;
     if (!/^[a-z0-9_]{1,15}$/.test(handle) || typeof seconds !== 'number' || !Number.isFinite(seconds) || seconds < 0 || seconds > 120) throw new Error('Invalid account or delay.');
     const path = url.pathname.toLowerCase().replace(/\/$/, '');
-    if (![ `/${handle}`, `/${handle}/with_replies` ].includes(path)) throw new Error('Start from your own Posts or Replies tab.');
+    if (![ `/${handle}`, `/${handle}/all`, `/${handle}/with_replies` ].includes(path)) throw new Error('Start from your own Posts/All or Replies tab.');
     job = {
       id: crypto.randomUUID(), handle, seconds, sourceTabId: sender.tab.id,
       workerTabId: null, status: 'starting', submitted: 0,
+      timeline: 'all', route: `/${handle}/all`, pass: 1,
+      passStart: 0, cleanPasses: 0,
       message: 'Opening a background deletion tab.'
     };
     await saveJob(job);
     try {
-      const tab = await chrome.tabs.create({url: `https://x.com/${handle}/with_replies`, active: false});
+      const tab = await chrome.tabs.create({url: `https://x.com${job.route}`, active: false});
       job.workerTabId = tab.id;
       await saveJob(job);
       // Best effort: Chrome can still suspend tabs or stop execution on shutdown.
@@ -61,10 +64,43 @@ async function handleMessage(message, sender) {
       }
       return { job: snapshot(job) };
     }
-    if (url.pathname.toLowerCase().replace(/\/$/, '') !== `/${job.handle}/with_replies`) throw new Error('Unexpected deletion-tab URL.');
+    const path = url.pathname.toLowerCase().replace(/\/$/, '');
+    const expected = job.route || `/${job.handle}/with_replies`;
+    if (path !== expected && !(job.timeline === 'all' && path === `/${job.handle}`)) throw new Error('Unexpected deletion-tab URL.');
     job.status = 'running'; job.message = 'Waiting for the signed-in account and timeline.';
     await saveJob(job);
     return { job: snapshot(job), claim: true };
+  }
+  if (message.type === 'NEXT_PASS') {
+    if (sender.tab.id !== job.workerTabId || message.id !== job.id || job.status !== 'running') throw new Error('No active authorized verification pass.');
+    if (!Number.isInteger(message.submitted) || message.submitted < job.submitted) throw new Error('Invalid deletion count.');
+    const progress = message.submitted > job.passStart;
+    if (message.batchLimit && !progress) throw new Error('Cannot reload without deletion progress.');
+    job.submitted = message.submitted;
+    job.cleanPasses = progress ? 0 : job.cleanPasses + 1;
+    if (job.cleanPasses >= 4) {
+      job.status = 'finished';
+      job.message = 'Fresh Posts/All and Replies timelines checked twice without further deletions. Unavailable history cannot be verified.';
+      return {job: snapshot(await saveJob(job))};
+    }
+    // Alternate full scans; a 25-deletion chunk reloads the same feed first.
+    if (!message.batchLimit) job.timeline = job.timeline === 'all' ? 'replies' : 'all';
+    job.route = job.timeline === 'all' ? `/${job.handle}/all` : `/${job.handle}/with_replies`;
+    job.pass++;
+    job.passStart = job.submitted;
+    job.status = 'starting';
+    job.message = `Loading fresh ${job.timeline} pass ${job.pass}; ${job.cleanPasses}/4 clean verification passes.`;
+    await saveJob(job);
+    try {
+      // update(url) may be a no-op for the identical URL, so explicitly reload.
+      if (url.pathname.toLowerCase().replace(/\/$/, '') === job.route) await chrome.tabs.reload(job.workerTabId);
+      else await chrome.tabs.update(job.workerTabId, {url: `https://x.com${job.route}`});
+    } catch (error) {
+      job.status = 'stopped'; job.message = `Cannot load verification pass: ${error.message}`;
+      await saveJob(job);
+      throw error;
+    }
+    return {job: snapshot(job), continue: true};
   }
   if (message.type === 'STOP_RUN' && message.id === job.id && ACTIVE.has(job.status)) {
     job.status = 'stopping'; job.message = 'Stop requested. No further deletion should be submitted.';
@@ -75,7 +111,8 @@ async function handleMessage(message, sender) {
   if (message.type === 'REPORT_RUN' && sender.tab.id === job.workerTabId && message.id === job.id) {
     if (Number.isInteger(message.submitted) && message.submitted >= job.submitted) job.submitted = message.submitted;
     if (typeof message.message === 'string') job.message = message.message.slice(0, 1200);
-    if (['finished', 'stopped'].includes(message.status)) job.status = message.status;
+    // Only NEXT_PASS may declare completion after checking both feeds.
+    if (message.status === 'stopped') job.status = 'stopped';
     await saveJob(job);
   }
   return { job: snapshot(job) };

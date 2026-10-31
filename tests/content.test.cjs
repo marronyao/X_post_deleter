@@ -18,7 +18,7 @@ function fixture() {
   window.self = window; window.top = window;
   const chrome = {runtime:{sendMessage:async () => ({}), onMessage:{addListener(){}}}};
   const sandbox = {window, document, chrome, location:{pathname:'/owner/with_replies'}, URL, setTimeout, setInterval:() => 1, clearInterval(){}, console};
-  const expose = `globalThis.api = {deleteAll, update, guard, run, runWorker, stopRun, context, invalidate, authorized,
+  const expose = `globalThis.api = {deleteAll, update, guard, run, runWorker, stopRun, context, invalidate, authorized, info, articles, caretFor,
     configure(code) { eval(code); }};`;
   vm.runInNewContext(source.replace('const owned =', 'let owned =').replace(/\}\)\(\);\s*$/, expose + '})();'), sandbox);
   return {sandbox, $, document, window, ui, api:sandbox.api};
@@ -32,7 +32,7 @@ function scanFixture() {
     info = x => x; articles = () => rows; owned = () => [];
     pause = async () => { guard(); ticks++; };
     removeOne = async item => { guard(); deleted.push(item.id); submitted++; rows = rows.filter(x => x.id !== item.id); return true; };
-    errorToast = () => null;`);
+    errorToast = () => null; emptyTimeline = () => true; permalinkData = x => x;`);
   const root = {scrollTop:0, scrollHeight:800, scrollBy(){}};
   f.document.scrollingElement = root;
   return {...f, root};
@@ -66,7 +66,7 @@ test('refuses someone else profile and non-profile pages', async () => {
     f.sandbox.location.pathname=path;
     assert.throws(() => f.api.context('owner'),/own profile/);
   }
-  for (const path of ['/owner','/owner/with_replies']) {
+  for (const path of ['/owner','/owner/all','/owner/with_replies']) {
     f.sandbox.location.pathname=path;
     assert.equal(f.api.context('owner'),path);
   }
@@ -91,7 +91,7 @@ test('discovers later posts automatically and ignores another author', async () 
   await f.api.deleteAll(12);
   assert.deepEqual(Array.from(f.sandbox.deleted),['1','2']);
   assert(scrolls>=8);
-  assert.match(f.$('log').textContent,/does not prove your entire history is empty/);
+  assert.match(f.$('log').textContent,/checking both Posts\/All and Replies/);
 });
 test('does not delete the same ID again when it reappears', async () => {
   const f=scanFixture(); f.sandbox.rows=[{id:'1',handle:'owner'}];
@@ -124,7 +124,7 @@ test('stuck loading indicator stops after bounded empty scans', async () => {
 });
 test('background worker cleans up after an error and reports Stopped', async () => {
   const f=scanFixture(); f.api.configure("account=()=>'owner'; deleteAll = async () => {throw new Error('test failure')}");
-  const reports=[]; f.sandbox.chrome.runtime.sendMessage=async m => {reports.push(m);return {}};
+  const reports=[]; f.sandbox.chrome.runtime.sendMessage=async m => {reports.push(m);return m.type==='NEXT_PASS' ? {job:{status:'finished'}} : {}};
   await f.api.runWorker({id:'job',handle:'owner',seconds:0});
   assert.equal(f.$('stop').disabled,true);
   assert.equal(f.$('delay').disabled,false);
@@ -156,8 +156,67 @@ test('background worker refuses an account different from the authorized identit
 test('background worker runs while hidden and reports completion', async () => {
   const f=scanFixture(); f.document.hidden=true;
   f.api.configure("account=()=>'owner'; deleteAll=async()=>{submitted=2}");
-  const reports=[]; f.sandbox.chrome.runtime.sendMessage=async m=>{reports.push(m);return {}};
+  const reports=[]; f.sandbox.chrome.runtime.sendMessage=async m=>{reports.push(m);return m.type==='NEXT_PASS' ? {job:{status:'finished'}} : {}};
   await f.api.runWorker({id:'job',handle:'owner',seconds:0});
   assert.equal(reports.at(-1).status,'finished');
   assert.equal(reports.at(-1).submitted,2);
+});
+
+function postFixture({header=true, label='', caret=true}={}) {
+  const article={parentElement:{closest:()=>null}, contains:()=>true};
+  const permalink={href:'https://x.com/owner/status/123',closest:()=>article,compareDocumentPosition:()=>0};
+  const time={closest:selector=>selector==='a[href]'?permalink:article};
+  const profile={href:'https://x.com/owner',closest:()=>article,compareDocumentPosition:()=>4};
+  const author={closest:()=>article,querySelectorAll:()=>[profile]};
+  const social={closest:()=>article,textContent:label};
+  const more={closest:()=>article,getClientRects:()=>[{}],getAttribute:()=> 'More'};
+  article.querySelectorAll=selector=> {
+    if(selector==='time') return [time];
+    if(selector==='[data-testid="User-Name"]') return header?[author]:[];
+    if(selector==='a[href]') return [profile,permalink];
+    if(selector==='[data-testid="socialContext"]') return label?[social]:[];
+    if(selector==='[data-testid="caret"]') return caret?[more]:[];
+    if(selector==='button, [role="button"]') return [more];
+    return [];
+  };
+  return {article,more};
+}
+test('real parser keeps own posts with unknown social labels and header fallback', () => {
+  const f=fixture();
+  assert.equal(f.api.info(postFixture({label:'Promoted context'}).article).id,'123');
+  assert.equal(f.api.info(postFixture({header:false}).article).handle,'owner');
+  assert.equal(f.api.info(postFixture({label:'You reposted'}).article),null);
+});
+test('missing caret test ID does not silently hide a post and More fallback works', () => {
+  const f=fixture(); const {article,more}=postFixture({caret:false});
+  assert.equal(f.api.info(article).id,'123');
+  assert.equal(f.api.caretFor(article),more);
+});
+test('article discovery works without primaryColumn or tweet test IDs', () => {
+  const f=fixture(); const {article}=postFixture();
+  f.document.querySelector=selector=>selector==='main'?{querySelectorAll:()=>[article]}:null;
+  assert.equal(f.api.articles()[0],article);
+});
+test('recognizable own posts with a parser failure stop with a diagnostic', async () => {
+  const f=scanFixture(); f.sandbox.rows=[{id:'bad',handle:'owner'}];
+  f.api.configure("info=()=>null; permalinkData=()=>({id:'bad',handle:'owner'})");
+  await assert.rejects(f.api.deleteAll(0),/own posts could not be identified/);
+});
+test('blank or not-yet-loaded timeline is not declared complete', async () => {
+  const f=scanFixture();
+  f.api.configure('emptyTimeline=()=>false; until=async()=>{throw new Error("Timeline not ready")}');
+  await assert.rejects(f.api.deleteAll(0),/Timeline not ready/);
+});
+test('25 deletions return a checkpoint for a fresh timeline before scanning gaps', async () => {
+  const f=scanFixture(); f.sandbox.rows=Array.from({length:30},(_,i)=>({id:String(i),handle:'owner'}));
+  const result=await f.api.deleteAll(0);
+  assert.equal(result.batchLimit,true); assert.equal(f.sandbox.deleted.length,25);
+});
+test('worker does not report completion while a verification reload is pending', async () => {
+  const f=scanFixture(); f.api.configure("account=()=>'owner'; deleteAll=async()=>({batchLimit:false})");
+  const messages=[];
+  f.sandbox.chrome.runtime.sendMessage=async m=>{messages.push(m); return m.type==='NEXT_PASS'?{continue:true}:{};};
+  await f.api.runWorker({id:'job',handle:'owner',submitted:3,seconds:0});
+  assert.equal(messages.find(m=>m.type==='NEXT_PASS').submitted,3);
+  assert(!messages.some(m=>m.type==='REPORT_RUN'&&m.status==='finished'));
 });

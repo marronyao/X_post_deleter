@@ -1,4 +1,4 @@
-X Post Deleter — Chrome Extension 1.3.0
+X Post Deleter — Chrome Extension 1.3.1
 
 Installation
 1. Keep the extension files in a permanent folder. If you received a ZIP file,
@@ -19,14 +19,14 @@ Updating an existing installation
 
 Usage
 1. Download your X archive before deleting. Deletion is permanent.
-2. Sign in and open Posts or Replies on your own X profile.
+2. Sign in and open Posts, All, or Replies on your own X profile.
 3. Your signed-in account is detected automatically. No username entry is needed.
 4. Delay defaults to 0 seconds. Values from 0 to 120 add a fixed wait between
    posts. No random delay is added. At 0, the tool still waits for X to respond.
 5. Type the exact lowercase word delete, then click Delete all posts or press Enter.
    This authorizes all discoverable posts, quote posts, and replies loaded later.
    There is no preview or additional confirmation prompt.
-6. A separate inactive tab opens your Replies timeline and performs deletion.
+6. A separate inactive tab scans Posts/All and Replies, reloading to verify results.
    You can switch tabs, navigate away from the starting page, or close it.
    Keep Chrome and the deletion tab open. Do not interact with the deletion tab
    or switch X accounts while the tool is running.
@@ -35,31 +35,38 @@ Usage
 8. Refresh your profile after the scan to verify results. X may not expose all
    older history. If more posts become visible, start a new run.
 9. Changing the delay clears confirmation. Stopping, completing, or refreshing
-   does not resume automatically. Type delete again to authorize another run.
+   does not resume automatically after an interruption. Type delete again to authorize another run.
 
 Background operation and scope
-- Posts and Replies are both valid starting pages. The separate deletion tab
-  uses Replies to include original posts, quote posts, and replies.
+- Posts, All (/USERNAME/all), and Replies are valid starting pages. The separate
+  deletion tab alternates fresh Posts/All and Replies scans.
 - Chrome may throttle hidden-tab timers. A best-effort request prevents automatic
   discard, but browser suspension, computer sleep, and shutdown can interrupt work.
-- Closing, navigating, or refreshing the deletion tab stops the run. The original
+- Manually closing, navigating, or refreshing the deletion tab stops the run.
+  Tool-initiated timeline changes and verification reloads remain authorized. The original
   page is only a controller and may be closed without stopping the deletion tab.
 - One run may be active at a time. The authorized account is checked before and
   during deletion. Account changes, unexpected menus, errors, and timeouts stop it.
-- Ordinary reposts and unrecognized social-context cards are skipped. Likes,
+- Recognizable ordinary reposts are skipped. Other social labels no longer hide
+  your own posts automatically. Likes,
   messages, and other people's posts are not changed. Deleting your quote post
   or reply does not delete the other person's original post.
-- Delete and Pinned labels are recognized in English, Simplified Chinese, and
+- Delete, More, and repost labels are recognized in English, Simplified Chinese, and
   Traditional Chinese. The extension interface is English.
-- Six unchanged bottom checks without a loader end the scan. This does not prove
-  the entire account history is empty. A stuck loader or 120 empty scroll checks
-  also stops scanning. No private API, archive import, or automatic reload is used.
+- Six unchanged bottom checks end a pass, not the run. The tool reloads after
+  each 25 deletions and checks both timelines on fresh pages. Completion requires
+  four consecutive fresh passes with no further deletions, covering both feeds
+  twice. New deletions reset verification. Unsupported cards or unrecognized
+  empty timelines stop with diagnostics instead of a false completion.
+- No web-interface tool can prove that history unavailable through X is empty.
+  A stuck loader or 120 empty scroll checks stops with an error. No private API
+  or archive import is used.
 - Follow X's instructions if it displays limits or verification requests.
   Delays do not bypass limits. Deletion is not automatically retried.
 - Automated tests use simulated tabs and timelines, not real-account deletions.
   X interface changes can break detection.
 - The storage permission keeps job state in Chrome's in-memory session storage:
-  account handle, delay, tab IDs, status, count, and latest message (possibly a
+  account handle, delay, tab IDs, status, count, verification-pass state, and latest message (possibly a
   post ID or X error). It is not synced and clears on browser restart or extension
   reload. No post bodies or archive are saved. Full logs remain in the page tabs.
 - No passwords, direct cookie access, private APIs, or third-party services are used.

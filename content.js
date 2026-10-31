@@ -1,4 +1,4 @@
-// X Post Deleter v1.3.0 — Chrome extension content script.
+// X Post Deleter v1.3.1 — Chrome extension content script.
 
 (() => {
   'use strict';
@@ -26,7 +26,7 @@
     </style>
     <button id="mini">Open X Post Deleter</button>
     <section>
-      <h2>X Post Deleter</h2>
+      <h2>X Post Deleter 1.3.1</h2>
       <small>Permanently delete all discoverable posts, quote posts, and replies. Download your X archive first. Ordinary reposts are skipped.</small>
       <p id="account" role="status">Your signed-in account will be detected automatically.</p>
       <p><small>Start from your own Posts or Replies tab. A separate background tab loads your posts and replies; you can browse elsewhere while it runs.</small></p>
@@ -70,33 +70,53 @@
   function context(handle) {
     if (!validHandle(handle) || account() !== handle) throw new Error('The signed-in account changed. Stopped.');
     const path = location.pathname.replace(/\/$/, '').toLowerCase();
-    if (path !== `/${handle}` && path !== `/${handle}/with_replies`) {
+    if (![ `/${handle}`, `/${handle}/all`, `/${handle}/with_replies` ].includes(path)) {
       throw new Error('Open the Posts or Replies tab on your own profile first.');
     }
     return path;
   }
-  function info(article) {
-    // Timestamp permalinks are used instead of arbitrary status links inside quoted posts.
+  function permalinkData(article) {
+    // The first timestamp belongs to the outer post, before any quoted card.
     const time = owned(article, 'time')[0];
     const permalink = time?.closest('a[href]');
     if (!permalink || !article.contains(permalink)) return null;
     const match = new URL(permalink.href).pathname.match(/^\/([A-Za-z0-9_]{1,15})\/status\/(\d+)\/?$/);
-    if (!match) return null;
+    return match && {time, permalink, handle: match[1].toLowerCase(), id: match[2]};
+  }
+  function info(article) {
+    const data = permalinkData(article);
+    if (!data) return null;
     const author = owned(article, '[data-testid="User-Name"]')[0];
-    const authorMatches = author && [...author.querySelectorAll('a[href]')].some(a =>
-      new URL(a.href).pathname.toLowerCase().replace(/\/$/, '') === `/${match[1].toLowerCase()}`);
+    const headerLinks = author ? [...author.querySelectorAll('a[href]')] : [];
+    const profileLinks = headerLinks.length ? headerLinks : owned(article, 'a[href]').filter(a =>
+      // Header/avatar profile links must precede the timestamp, not occur in a quote or body.
+      !!(a.compareDocumentPosition(data.permalink) & 4));
+    const authorMatches = profileLinks.some(a =>
+      new URL(a.href).pathname.toLowerCase().replace(/\/$/, '') === `/${data.handle}`);
     if (!authorMatches) return null;
-    // Keep pinned own posts, but conservatively skip other social-context cards.
+    // Unknown social labels must not hide own posts. Exclude recognizable reposts only.
     const social = owned(article, '[data-testid="socialContext"]');
-    if (social.some(el => !/^(pinned|\u7f6e\u9802|\u7f6e\u9876)$/i.test(text(el)))) return null;
-    if (!owned(article, '[data-testid="caret"]').length) return null;
-    return { id: match[2], handle: match[1].toLowerCase(),
-      url: `https://x.com/${match[1]}/status/${match[2]}`,
-      date: time.getAttribute('datetime') || text(time),
-      snippet: text(owned(article, '[data-testid="tweetText"]')[0]).slice(0, 180) || '(Image, video, or post without text)' };
+    if (social.some(el => /repost|retweet|\u8f49\u767c|\u8f6c\u53d1|\u8f49\u5e16|\u8f6c\u5e16/i.test(text(el)))) return null;
+    return {id: data.id, handle: data.handle, url: `https://x.com/${data.handle}/status/${data.id}`};
   }
   function articles() {
-    return [...document.querySelectorAll('[data-testid="primaryColumn"] article[data-testid="tweet"]')];
+    // Current X layouts do not always keep the tweet or primaryColumn test IDs.
+    const column = document.querySelector('[data-testid="primaryColumn"]') || document.querySelector('main');
+    const cards = column ? [...column.querySelectorAll('article')] : [];
+    const fallback = cards.length ? cards : [...(document.querySelector('main')?.querySelectorAll('article') || [])];
+    return fallback.filter(el => !el.parentElement?.closest('article'));
+  }
+  function caretFor(article) {
+    const explicit = owned(article, '[data-testid="caret"]').filter(visible);
+    if (explicit.length === 1) return explicit[0];
+    const buttons = owned(article, 'button, [role="button"]').filter(el => visible(el) &&
+      /^(more|\u66f4\u591a)$/i.test(el.getAttribute('aria-label') || text(el)));
+    return buttons.length === 1 ? buttons[0] : null;
+  }
+  function emptyTimeline() {
+    const column = document.querySelector('[data-testid="primaryColumn"]') || document.querySelector('main');
+    return !!column && [...column.querySelectorAll('[data-testid="emptyState"]')].some(el =>
+      /hasn.t posted|haven.t posted|no posts yet|no replies yet|nothing to see here|\u5c1a\u672a.*\u767c|\u8fd8\u6ca1.*\u53d1/i.test(text(el)));
   }
   function locate(item) {
     return articles().find(article => {
@@ -157,8 +177,8 @@
     await pause(400);
     article = locate(item);
     if (!article) throw new Error('The post was unloaded after scrolling. Start a new run after checking X.');
-    const caret = owned(article, '[data-testid="caret"]').find(visible);
-    if (!caret) throw new Error('Cannot find the menu button for this post. Stopped.');
+    const caret = caretFor(article);
+    if (!caret) throw new Error(`Cannot find a unique More menu for your post ${item.id}. Stopped; the interface needs inspection.`);
     guard(); caret.click();
     const menu = await until(() => [...document.querySelectorAll('[role="menu"]')].find(visible));
     const choices = [...menu.querySelectorAll('[role="menuitem"]')].filter(el => visible(el) && deleteItem(el));
@@ -188,16 +208,37 @@
     let scans = 0;
     window.scrollTo({ top: 0, behavior: 'instant' });
     await pause(2500);
+    await until(() => articles().length || emptyTimeline(), 15000);
+    let seenCards = 0;
+    const unresolved = new Set();
+    const unsupported = new Set();
     while (true) {
       guard();
       const failure = errorToast();
       if (failure) throw new Error(`X reported: ${failure}`);
       // Rediscover after every deletion: X virtualizes its timeline and unloads cards.
-      const item = articles().map(info).find(data => data && data.handle === session.handle && !processed.has(data.id));
+      const cards = articles();
+      seenCards = Math.max(seenCards, cards.length);
+      const parsed = cards.map(article => ({article, data: info(article)}));
+      for (const {article, data} of parsed) {
+        const link = permalinkData(article);
+        // A recognizable own permalink with no identity match is a parsing failure,
+        // not evidence of an empty timeline. Recognizable reposts are the exception.
+        const repost = owned(article, '[data-testid="socialContext"]').some(el => /repost|retweet|\u8f49\u767c|\u8f6c\u53d1|\u8f49\u5e16|\u8f6c\u5e16/i.test(text(el)));
+        if (!link && !repost) unsupported.add(article);
+        else unsupported.delete(article);
+        if (link?.handle === session.handle && !data && !repost) unresolved.add(link.id);
+        if (data) unresolved.delete(data.id);
+      }
+      const item = parsed.map(row => row.data).find(data => data && data.handle === session.handle && !processed.has(data.id));
       if (item) {
         $('status').textContent = `Deleting all: ${submitted} requests submitted; scanning for more posts.`;
         if (!await removeOne(item)) throw new Error('A discovered post was unloaded before deletion. Stopped; check X and start a new run.');
         processed.add(item.id);
+        if (processed.size >= 25) {
+          log('25 posts processed. Reloading a fresh timeline to avoid gaps from removed cards.');
+          return {batchLimit: true};
+        }
         scans = 0;
         quietBottom = 0;
         if (seconds > 0) await pause(seconds * 1000);
@@ -211,12 +252,15 @@
       await pause(2500);
       const afterSignature = articles().map(article => owned(article, 'time')[0]?.closest('a[href]')?.href || '').join('|');
       const atBottom = root.scrollTop + window.innerHeight >= root.scrollHeight - 20;
-      const loading = [...document.querySelectorAll('[data-testid="primaryColumn"] [role="progressbar"]')].some(visible);
+      const loading = [...document.querySelectorAll('main [role="progressbar"]')].some(visible);
       quietBottom = atBottom && !loading && root.scrollTop === before && root.scrollHeight === height && signature === afterSignature ? quietBottom + 1 : 0;
       $('status').textContent = `Deleting all: ${submitted} requests submitted; loading older posts (${quietBottom}/6 end checks).`;
       if (quietBottom >= 6) {
-        log('Scan ended: X exposed no more eligible posts after repeated bottom checks. This does not prove your entire history is empty. Refresh your profile and verify; X may stop exposing older posts.');
-        return;
+        if (unsupported.size) throw new Error(`Stopped: ${unsupported.size} post cards have an unsupported timestamp/permalink structure. The timeline is not verified empty.`);
+        if (unresolved.size) throw new Error(`Stopped: ${unresolved.size} own posts could not be identified reliably (IDs: ${[...unresolved].slice(0, 5).join(', ')}). The timeline is not verified empty.`);
+        if (!seenCards && !emptyTimeline()) throw new Error('No post cards or recognized empty state were loaded. Stopped; this is not a completed scan.');
+        log(`This timeline pass reached the bottom (${seenCards} maximum loaded cards). Reloading and checking both Posts/All and Replies before completion.`);
+        return {batchLimit: false};
       }
       // A stuck loader or changing page must not create an unbounded empty scan.
       if (++scans >= 120) throw new Error('No eligible posts found after 120 scroll checks. Stopped; refresh and check X before starting again.');
@@ -261,12 +305,13 @@
     finally { launching = false; update(); }
   }
   async function runWorker(job) {
-    running = true; stopped = false; submitted = 0;
-    session = {handle: job.handle, path: `/${job.handle}/with_replies`, jobId: job.id};
+    running = true; stopped = false; submitted = job.submitted || 0;
+    session = {handle: job.handle, path: location.pathname.toLowerCase().replace(/\/$/, ''), jobId: job.id};
     $('account').textContent = `Deleting as @${job.handle} in this background tab`;
     $('confirm').value = ''; $('delay').value = String(job.seconds);
     $('delay').disabled = true; $('stop').disabled = false; update();
     let outcome = 'stopped';
+    let continuing = false;
     try {
       // X's navigation can appear after document_idle, especially in inactive tabs.
       const deadline = Date.now() + 120000;
@@ -282,14 +327,19 @@
       }
       guard();
       log(`Deleting all discoverable posts, quote posts, and replies by @${job.handle}. Extra delay: ${job.seconds} seconds.`);
-      await deleteAll(job.seconds);
+      const result = await deleteAll(job.seconds);
+      guard();
+      const next = await send({type: 'NEXT_PASS', id: job.id, submitted, batchLimit: !!result?.batchLimit});
+      if (next?.error) throw new Error(next.error);
+      if (next?.continue) { continuing = true; return; }
+      if (next?.job?.status !== 'finished') throw new Error('Could not verify the next scan pass. Stopped.');
       outcome = 'finished';
     } catch (error) { log(error.message); }
     finally {
-      await report(outcome === 'finished' ? 'Scan ended. Refresh your profile to verify remaining history.' : $('log').textContent.split('\n').pop(), outcome);
+      if (!continuing) await report(outcome === 'finished' ? 'Verified fresh Posts/All and Replies timelines across four passes without further deletions. Unavailable history cannot be verified.' : $('log').textContent.split('\n').pop(), outcome);
       running = false; stopped = true;
       session = null; $('confirm').value = ''; $('delay').disabled = false; $('stop').disabled = true;
-      $('status').textContent = `${outcome}; ${submitted} deletion requests submitted. Refresh to verify.`;
+      $('status').textContent = continuing ? 'Loading a fresh verification pass in this deletion tab.' : `${outcome}; ${submitted} deletion requests submitted. Refresh to verify.`;
       update();
     }
   }
